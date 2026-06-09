@@ -10,8 +10,14 @@ contextBridge.exposeInMainWorld('fanboxPty', {
   input: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   resize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   kill: (id) => ipcRenderer.send('pty:kill', { id }),
+  cwd: (id) => ipcRenderer.invoke('pty:cwd', { id }),
   onData: (cb) => { const h = (e, m) => cb(m); ipcRenderer.on('pty:data', h); return () => ipcRenderer.removeListener('pty:data', h); },
   onExit: (cb) => { const h = (e, m) => cb(m); ipcRenderer.on('pty:exit', h); return () => ipcRenderer.removeListener('pty:exit', h); },
+});
+
+contextBridge.exposeInMainWorld('fanboxFs', {
+  watch: (dir) => ipcRenderer.invoke('fs:watch', { dir }),
+  onChanged: (cb) => { const h = (e, m) => cb(m); ipcRenderer.on('fs:changed', h); return () => ipcRenderer.removeListener('fs:changed', h); },
 });
 
 contextBridge.exposeInMainWorld('fanboxEnv', {

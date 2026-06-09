@@ -89,3 +89,32 @@ ipcMain.handle('pty:spawn', (e, { id, cwd, cols, rows }) => {
 ipcMain.on('pty:input', (e, { id, data }) => { const p = terminals.get(id); if (p) p.write(data); });
 ipcMain.on('pty:resize', (e, { id, cols, rows }) => { const p = terminals.get(id); if (p) { try { p.resize(cols, rows); } catch { /* */ } } });
 ipcMain.on('pty:kill', (e, { id }) => { const p = terminals.get(id); if (p) { try { p.kill(); } catch { /* */ } terminals.delete(id); } });
+
+// 取某终端 shell 的真实当前目录（用 lsof 查 pty 子进程的 cwd），实现「定位到终端目录」
+ipcMain.handle('pty:cwd', (e, { id }) => new Promise((resolve) => {
+  const p = terminals.get(id);
+  if (!p || !p.pid) return resolve({ ok: false });
+  const { exec } = require('child_process');
+  exec(`lsof -a -p ${p.pid} -d cwd -Fn`, (err, stdout) => {
+    if (err) return resolve({ ok: false });
+    const line = stdout.split('\n').find((l) => l.startsWith('n'));
+    resolve(line ? { ok: true, cwd: line.slice(1) } : { ok: false });
+  });
+}));
+
+// ---------- 文件监听（agent 改文件 → 自动刷新）----------
+let watcher = null;
+let watchDir = null;
+ipcMain.handle('fs:watch', (e, { dir }) => {
+  if (dir === watchDir) return { ok: true };
+  try { if (watcher) watcher.close(); } catch { /* */ }
+  watcher = null; watchDir = null;
+  if (!dir || !fs.existsSync(dir)) return { ok: false };
+  try {
+    watcher = fs.watch(dir, { persistent: false }, (evt, filename) => {
+      if (win && !win.isDestroyed()) win.webContents.send('fs:changed', { dir, filename: filename ? filename.toString() : null });
+    });
+    watchDir = dir;
+    return { ok: true };
+  } catch (err) { return { ok: false, error: err.message }; }
+});

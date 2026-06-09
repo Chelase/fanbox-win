@@ -153,8 +153,13 @@ async function navigate(p, pushHistory = true) {
     $('#quick-filter').value = '';
     render();
     renderRootsActive();
+    // 联动：监听此目录的文件变化（agent 改文件→自动刷新）；终端跟随则 cd 过去
+    if (window.fanboxFs) window.fanboxFs.watch(state.cwd);
+    if (typeof term !== 'undefined' && term.followBrowse && term.active) term.syncCd(state.cwd);
   } catch (e) { toast('打开失败', true); }
 }
+// shell 单引号转义（用于把路径塞进终端 cd 命令）
+function shQuote(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 function goBack() { if (state.history.length) navigate(state.history.pop(), false); }
 function goUp() { if (state.parent && state.parent !== state.cwd) navigate(state.parent); }
 
@@ -553,6 +558,7 @@ function showContextMenu(ev, e) {
   const items = [];
   if (e.isDir) items.push({ label: '打开', fn: () => navigate(e.path) });
   else items.push({ label: '预览', fn: () => { state.selected = e.path; openPreview(e); renderFiles(); } });
+  if (e.isDir) items.push({ label: '在终端打开', fn: () => term.openInDir(e.path) });
   if (e.kind === 'text') items.push({ label: '编辑文本', fn: () => enterEditMode(e) });
   items.push({ label: '在编辑器打开', fn: () => openWith(e.path, 'editor') });
   items.push({ label: '在 Finder 显示', fn: () => openWith(e.path, 'reveal') });
@@ -832,6 +838,9 @@ function bindEvents() {
   $('#term-newtab').onclick = () => term.newTab();
   $('#term-dock').onclick = () => term.setDock(term.dock === 'bottom' ? 'right' : 'bottom');
   $('#term-close').onclick = () => term.close();
+  $('#term-follow').onclick = () => term.setFollow(!term.followBrowse);
+  $('#term-locate').onclick = () => term.locateCwd();
+  if (term.followBrowse) $('#term-follow').classList.add('on');
   bindTerminalResizer();
   $('#btn-new-dir').onclick = () => doCreate('dir');
   $('#btn-new-file').onclick = () => doCreate('file');
@@ -916,6 +925,7 @@ function applyTheme(skin, rerender = true) {
 const term = {
   sessions: [], seq: 0, active: null,
   dock: localStorage.getItem('fb_term_dock') || 'bottom',
+  followBrowse: localStorage.getItem('fb_term_follow') === '1',
   available() { return !!(window.fanboxPty && window.Terminal && !window.__noXterm); },
   theme() {
     const cs = getComputedStyle(document.documentElement);
@@ -954,7 +964,35 @@ const term = {
     this.fitActive();
   },
   setDock(d) { this.dock = d; localStorage.setItem('fb_term_dock', d); this.applyDock(); },
-  async newTab() {
+  // 在指定目录开终端（新标签）；浏览器版降级到系统终端
+  openInDir(dir) {
+    if (!this.available()) { openWith(dir, 'terminal'); return; }
+    $('#terminal-panel').classList.remove('hidden');
+    $('#terminal-resizer').classList.remove('hidden');
+    this.applyDock();
+    $('#btn-terminal').classList.add('active');
+    this.newTab(dir);
+  },
+  // 终端跟随浏览：把活动终端 cd 到指定目录
+  syncCd(dir) {
+    if (!this.active || !dir) return;
+    window.fanboxPty.input(this.active, 'cd ' + shQuote(dir) + '\r');
+  },
+  setFollow(on) {
+    this.followBrowse = on;
+    localStorage.setItem('fb_term_follow', on ? '1' : '0');
+    $('#term-follow').classList.toggle('on', on);
+    if (on && this.active && state.cwd) this.syncCd(state.cwd);
+  },
+  // 定位文件区到活动终端的真实目录
+  async locateCwd() {
+    if (!this.active) return;
+    const r = await window.fanboxPty.cwd(this.active);
+    if (r && r.ok && r.cwd) navigate(r.cwd);
+    else toast('取终端目录失败', true);
+  },
+  async newTab(cwdOverride) {
+    const startDir = cwdOverride || state.cwd;
     const id = 't' + (++this.seq);
     const host = document.createElement('div');
     host.className = 'xterm-instance';
@@ -968,10 +1006,10 @@ const term = {
     if (fit) xterm.loadAddon(fit);
     xterm.open(host);
     if (fit) try { fit.fit(); } catch { /* */ }
-    const sess = { id, xterm, fit, host, title: baseOf(state.cwd || '') || 'shell' };
+    const sess = { id, xterm, fit, host, title: baseOf(startDir || '') || 'shell' };
     this.sessions.push(sess);
     this.activate(id);
-    const r = await window.fanboxPty.spawn({ id, cwd: state.cwd, cols: xterm.cols, rows: xterm.rows });
+    const r = await window.fanboxPty.spawn({ id, cwd: startDir, cols: xterm.cols, rows: xterm.rows });
     if (!r.ok) { xterm.write('\r\n  \x1b[31m终端启动失败：' + (r.error || '') + '\x1b[0m\r\n'); }
     xterm.onData((d) => window.fanboxPty.input(id, d));
     xterm.onResize(({ cols, rows }) => window.fanboxPty.resize(id, cols, rows));
@@ -1018,6 +1056,21 @@ const term = {
 if (window.fanboxPty) {
   window.fanboxPty.onData(({ id, data }) => { const s = term.sessions.find((x) => x.id === id); if (s) s.xterm.write(data); });
   window.fanboxPty.onExit(({ id }) => { const s = term.sessions.find((x) => x.id === id); if (s) s.xterm.write('\r\n\x1b[90m[进程已退出，按 ✕ 关闭或回车重开]\x1b[0m\r\n'); });
+}
+// 文件变化 → 自动刷新列表（看着 agent 干活）；编辑中不动预览，避免吞掉未保存内容
+if (window.fanboxFs) {
+  let rt = null;
+  window.fanboxFs.onChanged(({ dir }) => {
+    if (dir !== state.cwd || state.recentMode) return;
+    clearTimeout(rt);
+    rt = setTimeout(async () => {
+      await refresh();
+      if (state.selected && !$('#preview').classList.contains('hidden') && !$('#ed-area')) {
+        const e = state.entries.find((x) => x.path === state.selected);
+        if (e && (e.kind === 'text' || e.kind === 'image')) openPreview(e);
+      }
+    }, 250);
+  });
 }
 
 // ---------- 启动 ----------
