@@ -9,7 +9,41 @@
   "scripts": {
     "start": "node server.js",
     "app": "electron .",
-    "rebuild": "electron-rebuild -f -w node-pty"
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "build:milkdown": "esbuild src-vendor/milkdown-entry.js --bundle --format=iife --minify --outfile=public/vendor/milkdown/milkdown.js --loader:.svg=dataurl --loader:.woff=file --loader:.woff2=file --loader:.ttf=file --loader:.eot=file --asset-names=[name]",
+    "dist": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.huashu.fanbox",
+    "productName": "翻箱 FanBox",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "asar": true,
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "identity": "Apple Development: chen yunfei (FG7WYU86RP)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": "arm64"
+        }
+      ]
+    },
+    "dmg": {
+      "title": "翻箱 FanBox",
+      "writeUpdateInfo": false
+    }
   },
   "type": "commonjs",
   "engines": {
@@ -17,13 +51,18 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",
-    "electron": "^33.2.0"
+    "@milkdown/crepe": "^7.21.2",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.0",
+    "monaco-editor": "^0.52.2"
   },
   "license": "MIT"
 }

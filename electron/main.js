@@ -5,7 +5,7 @@
  * 复用零依赖后端 server.js（文件能力），叠加 node-pty 内嵌终端，
  * 让 TUI coding agent（Claude Code / Codex / Aider…）在界面里直接跑起来。
  */
-const { app, BrowserWindow, ipcMain, shell, nativeImage, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeImage, Menu, clipboard } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -23,9 +23,25 @@ catch (e) { console.error('[fanbox] node-pty 未就绪（跑 npm run rebuild）�
 const terminals = new Map();
 let win = null;
 
+// ---------- 窗口尺寸/位置记忆 ----------
+const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
+function loadBounds() {
+  try {
+    const b = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+    if (b && b.width > 400 && b.height > 300) return b;
+  } catch { /* 首次启动无记录 */ }
+  return { width: 1320, height: 860 };
+}
+function saveBounds() {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  try { fs.writeFileSync(stateFile(), JSON.stringify(win.getBounds())); } catch { /* */ }
+}
+
 function createWindow() {
+  const b = loadBounds();
   win = new BrowserWindow({
-    width: 1320, height: 860, minWidth: 920, minHeight: 600,
+    width: b.width, height: b.height, x: b.x, y: b.y,
+    minWidth: 920, minHeight: 600,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0b0c0a',
     vibrancy: 'sidebar',
@@ -36,6 +52,12 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  // 拖动/缩放后防抖记忆，关窗再存一次兜底
+  let bt = null;
+  const remember = () => { clearTimeout(bt); bt = setTimeout(saveBounds, 400); };
+  win.on('resize', remember);
+  win.on('move', remember);
+  win.on('close', saveBounds);
 
   // 等后端起来再加载（首次 listen 有几十毫秒延迟）
   const load = () => win.loadURL(`http://localhost:${PORT}`).catch(() => setTimeout(load, 150));
@@ -110,6 +132,17 @@ ipcMain.handle('pty:spawn', (e, { id, cwd, cols, rows }) => {
   });
   return { ok: true, cwd: startCwd };
 });
+// ---------- 剪贴板：复制图片本体 / 复制文件（访达可粘贴）----------
+ipcMain.handle('clip:image', (e, { path: p }) => {
+  try { const img = nativeImage.createFromPath(p); if (img.isEmpty()) return { ok: false, error: '不是可读图片' }; clipboard.writeImage(img); return { ok: true }; }
+  catch (err) { return { ok: false, error: err.message }; }
+});
+ipcMain.handle('clip:file', (e, { path: p }) => new Promise((resolve) => {
+  const { execFile } = require('child_process');
+  // argv 传路径，避免拼进 AppleScript 字面量被注入
+  execFile('osascript', ['-e', 'on run argv', '-e', 'set the clipboard to (POSIX file (item 1 of argv))', '-e', 'end run', p], (err) => resolve({ ok: !err, error: err && err.message }));
+}));
+
 ipcMain.on('pty:input', (e, { id, data }) => { const p = terminals.get(id); if (p) p.write(data); });
 ipcMain.on('pty:resize', (e, { id, cols, rows }) => { const p = terminals.get(id); if (p) { try { p.resize(cols, rows); } catch { /* */ } } });
 ipcMain.on('pty:kill', (e, { id }) => { const p = terminals.get(id); if (p) { try { p.kill(); } catch { /* */ } terminals.delete(id); } });

@@ -12,13 +12,15 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
-const { exec, spawn } = require('child_process');
+const crypto = require('crypto');
+const { exec, spawn, execFile } = require('child_process');
 const { URL } = require('url');
 
 const HOME = os.homedir();
 const PORT = Number(process.env.FANBOX_PORT) || 4567;
 const CONFIG_DIR = path.join(HOME, '.fanbox');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const THUMB_DIR = path.join(CONFIG_DIR, 'thumbs');
 const PUBLIC = path.join(__dirname, 'public');
 const PLATFORM = process.platform;
 
@@ -51,6 +53,7 @@ const MIME = {
   mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/mp4',
   ogv: 'video/ogg', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
   m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac', pdf: 'application/pdf',
+  ttf: 'font/ttf', woff: 'font/woff', woff2: 'font/woff2',
 };
 
 // ---------- 工具函数 ----------
@@ -91,9 +94,24 @@ async function readConfig() {
   }
 }
 
-async function writeConfig(cfg) {
-  await fsp.mkdir(CONFIG_DIR, { recursive: true });
-  await fsp.writeFile(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+// 串行化「读-改-写」：高频 recordRecent 与收藏共享 config.json，必须排队整个 RMW 才不丢更新
+let _cfgChain = Promise.resolve();
+function updateConfig(mutator) {
+  const run = _cfgChain.then(async () => {
+    const cfg = await readConfig();
+    await mutator(cfg);
+    await fsp.mkdir(CONFIG_DIR, { recursive: true });
+    // 原子写：temp + fsync + rename，写一半崩溃不留截断 JSON（否则 readConfig 静默清空收藏/最近）
+    const tmp = `${CONFIG_FILE}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      const fh = await fsp.open(tmp, 'w');
+      try { await fh.writeFile(JSON.stringify(cfg, null, 2)); await fh.sync(); } finally { await fh.close(); }
+      await fsp.rename(tmp, CONFIG_FILE);
+    } catch (e) { await fsp.unlink(tmp).catch(() => {}); throw e; } // 写盘失败要冒泡给调用方，别静默成功
+    return cfg;
+  });
+  _cfgChain = run.catch(() => {}); // 保持队列存活，但 run 本身会 reject 让调用方感知失败
+  return run;
 }
 
 function sendJSON(res, code, obj) {
@@ -120,10 +138,12 @@ async function listDir(dirPath) {
         isDir = st.isDirectory();
       } catch { continue; }
     }
+    let btime = 0;
     try {
       const st = await fsp.lstat(full);
       size = st.size;
       mtime = st.mtimeMs;
+      btime = st.birthtimeMs || 0;
     } catch { /* ignore */ }
     entries.push({
       name: d.name,
@@ -133,6 +153,7 @@ async function listDir(dirPath) {
       hidden: d.name.startsWith('.'),
       size,
       mtime,
+      btime,
     });
   }
   // 文件夹在前，按名称排序
@@ -400,6 +421,44 @@ async function createEntry(parentPath, name, type) {
   return { ok: true, path: target, isDir: type === 'dir' };
 }
 
+// 终端里点文件名 → 定位真实文件：先直接 stat，找不到再按 basename 在终端 cwd 下搜最相关
+async function locatePath(p, name, root) {
+  if (p) {
+    try { const real = resolvePath(p); const st = await fsp.stat(real); return { found: true, path: real, isDir: st.isDirectory() }; }
+    catch { /* 直达失败，走搜索 */ }
+  }
+  if (name && root) {
+    try {
+      const data = await searchFiles(name, resolvePath(root));
+      const exact = (data.results || []).find((r) => r.name === name);
+      const best = exact || (data.results || [])[0];
+      if (best) return { found: true, path: best.path, isDir: best.isDir, viaSearch: true };
+    } catch { /* */ }
+  }
+  return { found: false };
+}
+
+// 图片编辑保存：前端 canvas 导出 dataURL（已含格式/尺寸/质量/标注），这里原子写回
+async function saveImage({ path: target, dataUrl, newName }) {
+  const m = /^data:image\/\w+;base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) throw new Error('无效图片数据');
+  const buf = Buffer.from(m[1], 'base64');
+  let dest = resolvePath(target);
+  if (newName) {
+    if (!validName(newName)) throw new Error('文件名不合法');
+    dest = path.join(path.dirname(dest), newName);
+    if (fs.existsSync(dest)) throw new Error('已存在同名文件');
+  }
+  const tmp = `${dest}.fanbox-tmp-${process.pid}-${Date.now()}`;
+  try {
+    const fh = await fsp.open(tmp, 'w');
+    try { await fh.writeFile(buf); await fh.sync(); } finally { await fh.close(); }
+    await fsp.rename(tmp, dest);
+  } catch (e) { await fsp.unlink(tmp).catch(() => {}); throw e; }
+  const st = await fsp.stat(dest);
+  return { ok: true, path: dest, size: st.size };
+}
+
 function openInOS(target, withApp) {
   return new Promise((resolve) => {
     let cmd, args;
@@ -483,6 +542,63 @@ async function serveStatic(req, res, urlPath) {
   }
 }
 
+// ---------- 缩略图（性能关键：不再把原图/原视频整文件当缩略图）----------
+const THUMB_IMG_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif']);
+const thumbInflight = new Map(); // cacheFile -> Promise，去重并发生成
+function run(cmd, args) {
+  return new Promise((resolve, reject) => execFile(cmd, args, { timeout: 15000 }, (e) => (e ? reject(e) : resolve())));
+}
+// 图片走 sips 缩放（快）；视频/PDF/其它走 qlmanage QuickLook 抽帧
+async function generateThumb(src, e, size, cacheFile, isImg) {
+  await fsp.mkdir(THUMB_DIR, { recursive: true });
+  if (isImg) {
+    await run('sips', ['-s', 'format', 'jpeg', '-Z', String(size), src, '--out', cacheFile]);
+    return;
+  }
+  const tmpDir = path.join(THUMB_DIR, '_ql_' + process.pid + '_' + crypto.randomBytes(4).toString('hex'));
+  await fsp.mkdir(tmpDir, { recursive: true });
+  try {
+    await run('qlmanage', ['-t', '-s', String(size), '-o', tmpDir, src]);
+    const png = (await fsp.readdir(tmpDir)).find((f) => f.endsWith('.png'));
+    if (!png) throw new Error('no thumb');
+    await fsp.rename(path.join(tmpDir, png), cacheFile);
+  } finally { fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {}); }
+}
+// 缩略图缓存按总体积上限做 LRU 裁剪（同一文件改一次就多一个缓存键，不清会无限涨）
+async function pruneThumbs(maxBytes = 400 * 1024 * 1024) {
+  try {
+    const files = await fsp.readdir(THUMB_DIR);
+    const stats = (await Promise.all(files.map(async (f) => {
+      if (f.startsWith('_ql_')) return null;
+      const fp = path.join(THUMB_DIR, f);
+      try { const s = await fsp.stat(fp); return s.isFile() ? { fp, size: s.size, t: s.mtimeMs } : null; } catch { return null; }
+    }))).filter(Boolean);
+    let total = stats.reduce((a, b) => a + b.size, 0);
+    if (total <= maxBytes) return;
+    stats.sort((a, b) => a.t - b.t); // 最旧的先删
+    for (const f of stats) { if (total <= maxBytes) break; await fsp.unlink(f.fp).catch(() => {}); total -= f.size; }
+  } catch { /* 目录不存在等，忽略 */ }
+}
+
+async function serveThumb(req, res, p, size) {
+  let src;
+  try { src = resolvePath(p); } catch { res.writeHead(400); res.end('bad path'); return; }
+  let st;
+  try { st = await fsp.stat(src); if (!st.isFile()) throw 0; } catch { res.writeHead(404); res.end('not found'); return; }
+  const s = Math.min(1600, Math.max(48, size || 240));
+  const e = ext(src);
+  const isImg = THUMB_IMG_EXT.has(e);
+  const key = crypto.createHash('md5').update(src + ':' + st.mtimeMs + ':' + s).digest('hex');
+  const cacheFile = path.join(THUMB_DIR, key + (isImg ? '.jpg' : '.png'));
+  const type = isImg ? 'image/jpeg' : 'image/png';
+  const sendCache = () => { res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'max-age=604800' }); fs.createReadStream(cacheFile).pipe(res); };
+  if (fs.existsSync(cacheFile)) return sendCache();
+  let pr = thumbInflight.get(cacheFile);
+  if (!pr) { pr = generateThumb(src, e, s, cacheFile, isImg).finally(() => thumbInflight.delete(cacheFile)); thumbInflight.set(cacheFile, pr); }
+  try { await pr; sendCache(); }
+  catch { res.writeHead(415); res.end('no thumb'); } // 前端 onerror 回退矢量图标
+}
+
 // 流式返回原始文件（图片 / 视频 / pdf / 音频预览），支持 Range
 function serveRaw(req, res, filePath) {
   let file;
@@ -537,6 +653,9 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/raw') {
       return serveRaw(req, res, qp.get('path'));
     }
+    if (p === '/api/thumb') {
+      return serveThumb(req, res, qp.get('path'), parseInt(qp.get('w') || '240', 10));
+    }
     if (p === '/api/search') {
       return sendJSON(res, 200, await searchFiles(qp.get('q'), qp.get('root') || HOME));
     }
@@ -546,16 +665,26 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/recent') {
       return sendJSON(res, 200, await recentFiles(qp.get('root') || HOME));
     }
+    if (p === '/api/locate') {
+      return sendJSON(res, 200, await locatePath(qp.get('path'), qp.get('name'), qp.get('root')));
+    }
     if (p === '/api/open' && req.method === 'POST') {
       const body = await readBody(req);
       const result = await openInOS(resolvePath(body.path), body.with);
-      // 记录最近打开
+      // 记录最近打开（串行 RMW，不丢更新）
       if (result.ok) {
-        const cfg = await readConfig();
-        cfg.recentOpened = [body.path, ...(cfg.recentOpened || []).filter((x) => x !== body.path)].slice(0, 30);
-        await writeConfig(cfg);
+        await updateConfig((cfg) => { cfg.recentOpened = [body.path, ...(cfg.recentOpened || []).filter((x) => x !== body.path)].slice(0, 30); });
       }
       return sendJSON(res, 200, result);
+    }
+    if (p === '/api/recent-open' && req.method === 'POST') {
+      // 内部预览/编辑也记入「最近打开」，去重 + 最近优先（串行 RMW）
+      const body = await readBody(req);
+      if (body.path) {
+        const cfg = await updateConfig((c) => { c.recentOpened = [body.path, ...(c.recentOpened || []).filter((x) => x !== body.path)].slice(0, 30); });
+        return sendJSON(res, 200, { ok: true, recentOpened: cfg.recentOpened });
+      }
+      return sendJSON(res, 200, { ok: false });
     }
     if (p === '/api/write' && req.method === 'POST') {
       const b = await readBody(req);
@@ -570,22 +699,27 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       return sendJSON(res, 200, await renamePath(b.path, b.newName));
     }
+    if (p === '/api/image-save' && req.method === 'POST') {
+      const body = await readBody(req);
+      try { return sendJSON(res, 200, await saveImage(body)); }
+      catch (e) { return sendJSON(res, 200, { error: e.message }); }
+    }
     if (p === '/api/create' && req.method === 'POST') {
       const b = await readBody(req);
       return sendJSON(res, 200, await createEntry(b.path, b.name, b.type));
     }
     if (p === '/api/favorites') {
-      const cfg = await readConfig();
       if (req.method === 'POST') {
         const body = await readBody(req);
-        const favs = new Set((cfg.favorites || []).map((f) => f.path));
-        if (favs.has(body.path)) {
-          cfg.favorites = cfg.favorites.filter((f) => f.path !== body.path);
-        } else {
-          cfg.favorites = [{ path: body.path, name: body.name, isDir: body.isDir }, ...(cfg.favorites || [])].slice(0, 50);
-        }
-        await writeConfig(cfg);
+        const cfg = await updateConfig((c) => {
+          const has = (c.favorites || []).some((f) => f.path === body.path);
+          c.favorites = has
+            ? c.favorites.filter((f) => f.path !== body.path)
+            : [{ path: body.path, name: body.name, isDir: body.isDir }, ...(c.favorites || [])].slice(0, 50);
+        });
+        return sendJSON(res, 200, { favorites: cfg.favorites || [], recentOpened: cfg.recentOpened || [] });
       }
+      const cfg = await readConfig();
       return sendJSON(res, 200, { favorites: cfg.favorites || [], recentOpened: cfg.recentOpened || [] });
     }
 
@@ -613,6 +747,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`  🔗  ${link}`);
   console.log('  🏠  根目录:', HOME);
   console.log('\n  按 Ctrl+C 退出\n');
+  pruneThumbs().catch(() => {}); // 启动时裁剪缩略图缓存，防止无限增长
   if (!process.env.FANBOX_NO_OPEN) {
     const opener = PLATFORM === 'darwin' ? 'open' : PLATFORM === 'win32' ? 'start' : 'xdg-open';
     exec(`${opener} ${link}`, () => {});

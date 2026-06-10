@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('fanboxFs', {
   onChanged: (cb) => { const h = (e, m) => cb(m); ipcRenderer.on('fs:changed', h); return () => ipcRenderer.removeListener('fs:changed', h); },
 });
 
+contextBridge.exposeInMainWorld('fanboxClipboard', {
+  copyImage: (path) => ipcRenderer.invoke('clip:image', { path }),
+  copyFile: (path) => ipcRenderer.invoke('clip:file', { path }),
+});
+
 contextBridge.exposeInMainWorld('fanboxEnv', {
   isDesktopApp: true,
   platform: process.platform,
