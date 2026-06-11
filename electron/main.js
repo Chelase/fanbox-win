@@ -81,9 +81,13 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   startShotWatch();
-  // 启动 6 秒后查一次新版本（不挡启动），长开会话每 12 小时再查
+  // 启动 6 秒后查一次新版本（不挡启动）；长开会话每 2 小时再查；
+  // 窗口重新聚焦也顺手查（30 分钟节流）——否则发版当天老 app 要等满周期才知道有新版
   setTimeout(checkUpdate, 6000);
-  setInterval(checkUpdate, 12 * 3600 * 1000);
+  setInterval(checkUpdate, 2 * 3600 * 1000);
+  app.on('browser-window-focus', () => {
+    if (Date.now() - lastAutoCheck > 30 * 60 * 1000) checkUpdate();
+  });
 });
 
 // ---------- 截图直通车：监听系统截屏落盘，新截图推给渲染层浮出直通卡 ----------
@@ -149,8 +153,10 @@ async function fetchLatestRelease() {
 }
 let pendingUpdate = null; // 渲染层晚注册监听也能拉到（启动 6 秒的推送 vs init 加载大目录，谁先谁后说不准）
 let updRetry = 0;
+let lastAutoCheck = 0;
 async function checkUpdate(opts) {
   const manual = !!(opts && opts.manual);
+  if (!manual) lastAutoCheck = Date.now();
   let info = null;
   try { info = await fetchLatestRelease(); } catch { info = null; }
   if (!info) {
