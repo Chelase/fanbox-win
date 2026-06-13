@@ -33,6 +33,8 @@ const SVG = {
   inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
   gitbranch: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  maximize: '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>',
+  minimize: '<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>',
   // 高辨识度文件类型图标
   md: '<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M6 15.5V9l3 3 3-3v6.5"/><path d="M17 9v4.5"/><path d="M14.8 12.5L17 15l2.2-2.5"/>',
   html: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9.3 12.5 7.5 14.5 9.3 16.5"/><polyline points="14.7 12.5 16.5 14.5 14.7 16.5"/>',
@@ -613,24 +615,20 @@ function renderHtmlPreview(data, meta) {
   body.innerHTML =
     `<div class="html-preview-host">
       ${meta}
-      <div class="pv-toolbar"><button id="html-toggle" class="ghost-btn">查看源码</button><button id="html-fit" class="ghost-btn hidden"></button><button id="html-browser" class="ghost-btn">${ic('globe', 'currentColor', 13)} 浏览器打开（看完整交互）</button></div>
+      <div class="pv-toolbar"><button id="html-toggle" class="ghost-btn">查看源码</button><button id="html-browser" class="ghost-btn">${ic('globe', 'currentColor', 13)} 浏览器打开（看完整交互）</button></div>
       <div class="iframe-wrap"><iframe class="iframe-preview" sandbox="allow-scripts" scrolling="yes" src="${fsUrl(data.path, data.mtime)}"></iframe></div>
     </div>`;
   // 桌面 Chromium 的 iframe 不认 viewport meta，定宽桌面页在窄预览框里只露左上角。
-  // /fs/ 注入的测宽脚本会把页面自然宽度 postMessage 过来：超出容器就整页等比缩到适配，
-  // 工具栏按钮可在「适配宽度 ↔ 实际大小」间切换（实际大小时在 iframe 内部滚动看全页）
+  // /fs/ 注入的测宽脚本会把页面自然宽度 postMessage 过来：超出容器就整页等比缩到适配宽度。
   const wrap = body.querySelector('.iframe-wrap');
   const frame = wrap.firstElementChild;
-  const fitBtn = $('#html-fit');
-  let natW = 0, fitOn = true;
+  let natW = 0;
+  // 定宽桌面页超出预览框就整页等比缩到适配宽度；放得下就保持原样
   const applyFit = () => {
     const cw = wrap.clientWidth;
-    if (!natW || natW <= cw + 8 || !cw) { frame.removeAttribute('style'); fitBtn.classList.add('hidden'); return; }
-    fitBtn.classList.remove('hidden');
-    if (!fitOn) { frame.removeAttribute('style'); fitBtn.textContent = '适配宽度'; return; }
+    if (!natW || natW <= cw + 8 || !cw) { frame.removeAttribute('style'); return; }
     const k = cw / natW;
     frame.style.cssText = `width:${natW}px;height:${Math.round(wrap.clientHeight / k)}px;transform:scale(${k});transform-origin:0 0;`;
-    fitBtn.textContent = `实际大小（现 ${Math.round(k * 100)}%）`;
   };
   const onMsg = (ev) => {
     if (!frame.isConnected || ev.source !== frame.contentWindow) return;
@@ -643,7 +641,6 @@ function renderHtmlPreview(data, meta) {
   const ro = new ResizeObserver(applyFit);
   ro.observe(wrap);
   renderHtmlPreview._cleanup = () => { window.removeEventListener('message', onMsg); ro.disconnect(); renderHtmlPreview._cleanup = null; };
-  fitBtn.onclick = () => { fitOn = !fitOn; applyFit(); };
   let src = false;
   $('#html-browser').onclick = () => openWith(data.path, 'default');
   $('#html-toggle').onclick = () => {
@@ -686,6 +683,7 @@ function renderPreviewActions(e) {
   const clip = window.fanboxClipboard;
   // 图标为主、文字精简：主操作「打开」留字，其余只留图标 + tooltip
   const acts = [
+    { id: 'preview-maxbtn', icon: ic(previewMax ? 'minimize' : 'maximize', 'currentColor', 15), title: previewMax ? '退出全屏' : '全屏放大', fn: () => setPreviewMax() },
     { icon: ic('link', 'currentColor', 14), label: '打开', title: '默认应用打开', cls: 'primary', fn: () => openWith(e.path, 'default') },
     ...(e.kind === 'text' && !isMdName(e.name) ? [{ icon: ic('edit3', 'currentColor', 15), title: '编辑文本', fn: () => enterEditMode(e) }] : []), // md 预览即编辑，无需入口
     ...(e.kind === 'text' ? [{ icon: ic('gitbranch', 'currentColor', 15), title: '查看改动（HEAD vs 当前）', fn: () => showDiff(e) }] : []),
@@ -698,6 +696,7 @@ function renderPreviewActions(e) {
   ];
   acts.forEach((a) => {
     const b = document.createElement('button');
+    if (a.id) b.id = a.id;
     b.className = (a.cls || '') + (a.label ? '' : ' icon-only');
     // 有可见文字的按钮不需气泡；纯图标按钮用 data-tip 即时气泡（不再用慢吞吞的原生 title）
     if (!a.label && a.title) b.dataset.tip = a.title;
@@ -723,6 +722,7 @@ async function copyFile(p) { const r = await window.fanboxClipboard.copyFile(p);
 async function closePreview() {
   if (!await guardDirty()) return;
   mona.disposeIfAny(); crepe.disposeIfAny(); imgEditState = null;
+  if (previewMax) setPreviewMax(false);
   animateLayout();
   $('#preview').classList.add('hidden');
   $('#preview-resizer').classList.add('hidden');
@@ -904,6 +904,14 @@ function showPreviewPanel() {
   $('#preview-resizer').classList.remove('hidden');
   if (wasHidden) animateLayout();
   applyPreviewSize();
+}
+// 预览全屏：让 #preview 铺满整个窗口（盖住文件区/终端/侧边栏）。md 全屏下仍是所见即所得，可继续编辑。
+let previewMax = false;
+function setPreviewMax(on) {
+  previewMax = on === undefined ? !previewMax : !!on;
+  $('#preview').classList.toggle('is-max', previewMax);
+  const b = $('#preview-maxbtn');
+  if (b) { b.innerHTML = ic(previewMax ? 'minimize' : 'maximize', 'currentColor', 15); b.dataset.tip = previewMax ? '退出全屏' : '全屏放大'; }
 }
 function applyPreviewWidth() { applyPreviewSize(); } // 兼容旧调用名
 function toggleSidebar(force) {
@@ -2070,6 +2078,8 @@ function bindEvents() {
     }
     if (lbOpen) { if (e.key === 'Escape') document.querySelector('.lightbox').remove(); return; }
     if (imgEditState && (e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); ieUndo(imgEditState); return; }
+    // 全屏预览下 Esc 先退出全屏（即便焦点在 md 编辑器里），不直接关掉预览
+    if (e.key === 'Escape' && previewMax) { e.preventDefault(); setPreviewMax(false); return; }
     const inInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
     // 输入框里按 Esc 先退出输入，别越级把预览关掉
     if (e.key === 'Escape' && inInput) { document.activeElement.blur(); return; }

@@ -326,6 +326,13 @@ kbd {
   display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0;
 }
 #preview.hidden { display: none; }
+/* 全屏放大：脱离分屏，铺满整个窗口（盖住文件区/终端/侧边栏）。md/html 放大后照样可看可编辑。
+   z-index 取 55，和图片编辑全屏一致——低于弹窗层（.input-overlay 60），未保存确认等弹窗才能浮在上面。 */
+#preview.is-max {
+  position: fixed; inset: 0; z-index: 55;
+  flex-basis: auto !important; width: auto !important; height: auto !important;
+  border: none;
+}
 .dock-bottom #preview { border-left: 1px solid var(--border); }
 .dock-right #preview { border-top: 1px solid var(--border); }
 /* 标题 + 操作按钮 + 关闭 全部并到一行，省掉一整行高度 */
