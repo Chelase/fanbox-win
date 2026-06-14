@@ -11,7 +11,12 @@
 
 ## [Unreleased]
 
-## [1.11.1] - 2026-06-14
+## [1.11.2] - 2026-06-14
+
+### Fixed
+- **HTML 预览里本地图片裂图**：不同 coding agent 生成的 html 引图方式各异，`file://` 绝对 URL 和 `/Users` 裸绝对路径在 http 预览（沙箱 iframe）里都加载不了。现在预览会自动把图片引用兜底到 `/fs` 镜像端点——`file://` 主动改写（这类永远加载不了，改了只会帮忙），其余绝对路径仅在加载失败时才兜底重写（对本来能加载的相对/远程/data 引用零影响），真缺失的文件不会被假装修好。覆盖 `src` / `href` / `poster` 和内联 style 的 `background:url(file://…)`
+
+
 
 ### Added
 - 内嵌终端字体优先使用系统已装的 **Nerd Font**（JetBrainsMono / MesloLGS / FiraCode / Hack / Symbols Nerd Font），让 Starship、powerline 等主题的图标和箭头正常显示，不再是方块 tofu
