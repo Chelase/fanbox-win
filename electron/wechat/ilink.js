@@ -155,13 +155,18 @@ async function sendMedia(account, toUserId, filePath, contextToken) {
   return r.json;
 }
 
-// 从一条收到的消息里取纯文本（文本 / 语音转写 / 引用）
-function textFromMsg(msg) {
+// 从一条收到的消息里提取内容：纯文本（文本/语音转写）+ 媒体附件（图片/文件）。
+// 媒体的真实下载/解密待 downloadMedia 实现（入站字段结构需真实样本确认，先把 item 原样带出）。
+function contentFromMsg(msg) {
+  let text = '';
+  const medias = [];
   for (const it of msg.item_list || []) {
-    if (it.type === 1 && it.text_item && it.text_item.text != null) return it.text_item.text;
-    if (it.type === 3 && it.voice_item && it.voice_item.text) return it.voice_item.text;
+    if (it.type === 1 && it.text_item && it.text_item.text != null) text = it.text_item.text;
+    else if (it.type === 3 && it.voice_item && it.voice_item.text) text = it.voice_item.text;
+    else if (it.type === 2 && it.image_item) medias.push({ kind: 'image', name: it.image_item.file_name || '图片', item: it.image_item });
+    else if (it.type === 4 && it.file_item) medias.push({ kind: 'file', name: it.file_item.file_name || '文件', item: it.file_item });
   }
-  return '';
+  return { text, medias };
 }
 
 // ---------- 本地持久化 ----------
@@ -169,5 +174,5 @@ function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file
 function writeJson(file, obj) { try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(obj, null, 2)); } catch { /* */ } }
 
 module.exports = {
-  LOGIN_BASE, fetchQrcode, pollQrStatus, getUpdates, sendText, sendTyping, sendMedia, textFromMsg, readJson, writeJson, ping,
+  LOGIN_BASE, fetchQrcode, pollQrStatus, getUpdates, sendText, sendTyping, sendMedia, contentFromMsg, readJson, writeJson, ping,
 };

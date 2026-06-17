@@ -44,6 +44,20 @@ const WX_TERM_PROTOCOL = [
   '注意：要执行命令必须让文本以换行结尾（相当于按回车），例如 <term n="2">npm test\\n</term>；只回车确认就写一个 \\n。只有花叔明确要你操控某终端时才用，别擅自发指令。',
 ].join('\n');
 
+// 终端输入规范化：① 把 agent 按协议写的字面转义（\n \r \t）还原成控制符；
+// ② 交互式 TUI（claude/codex 输入框）里「回车提交」是 CR(\r) 不是 LF(\n)——把换行统一成 \r，
+//    否则文本只换行、停在输入框里发不出去。
+function normTermText(text) {
+  return String(text == null ? '' : text)
+    .replace(/\\r\\n|\\r|\\n/g, '\n') // 字面 \n / \r 还原为真换行
+    .replace(/\\t/g, '\t')           // 字面 \t 还原为制表符
+    .replace(/\r\n|\n/g, '\r');      // 换行 → 回车，才会真正提交
+}
+
+// 长任务安抚语：超过阈值没动静时随机挑一句发出去，让花叔知道链路还活着、agent 还在干活。
+const REASSURE = ['还在弄，稍等一下', '这个有点复杂，正在跑', '处理中，马上好', '正在想，再给我点时间', '还在处理，没断'];
+function pickReassure() { return REASSURE[Math.floor(Math.random() * REASSURE.length)]; }
+
 const bridge = {
   win: null,
   target: 'claude',                // 当前大脑：claude / codex（默认 claude——已验证无头 JSON 干净可用）
@@ -154,25 +168,26 @@ const bridge = {
     for (const op of ops) {
       const t = this._termRoster[op.n - 1];
       if (!t) { done.push(`#${op.n}（找不到）`); continue; }
-      const r = this.termControl.send(t.id, op.text);
+      const r = this.termControl.send(t.id, normTermText(op.text));
       done.push(r && r.ok ? `#${op.n} ${t.name || ''}`.trim() : `#${op.n}（失败）`);
     }
     return (clean || '') + (done.length ? `\n\n⌨️ 已向终端发送：${done.join('、')}` : '');
   },
 
   // 跑一轮大脑：按 target 选 driver，带上该会话的工作目录与（claude 的）续话 session
-  async runAgent(cid, text) {
+  // onProgress：可选，driver 流式跑时把「正在干啥」回调出来，用于微信实时播报
+  async runAgent(cid, text, onProgress) {
     const c = this.conv(cid);
     // 系统提示 = 人格 + 注入记忆 + 记忆协议 + 发文件协议 + 控制终端协议 + 别的终端实时状态
     const termCtx = await this.buildTermContext();
     const sys = [this.persona, memory.inject(), memory.PROTOCOL, WX_FILE_PROTOCOL, WX_TERM_PROTOCOL, termCtx].filter(Boolean).join('\n\n');
     let raw;
     if (this.target === 'claude') {
-      const r = await driver.runClaude(text, this.cwd, c.claudeSession, sys);
+      const r = await driver.runClaude(text, this.cwd, c.claudeSession, sys, onProgress);
       if (r.sessionId) { c.claudeSession = r.sessionId; this.persistConvos(); }
       raw = r.text;
     } else {
-      const r = await driver.runCodex(text, this.cwd, sys, c.codexSession);
+      const r = await driver.runCodex(text, this.cwd, sys, c.codexSession, onProgress);
       if (r.sessionId) { c.codexSession = r.sessionId; this.persistConvos(); }
       raw = r.text;
     }
@@ -252,20 +267,55 @@ const bridge = {
       }
     })();
   },
+  // 入站媒体原始 JSON 落盘：用来确认图片/文件消息的字段结构，好实现 downloadMedia 真读取。
+  logInbound(msg) {
+    try { fs.appendFileSync(f('inbound-media.log'), JSON.stringify(msg) + '\n'); } catch { /* */ }
+  },
+
+  // 生命体征控制器：在 agent 跑的整段时间里维持「链路活着」的感知，回收时一次性收尾。
+  //  ① typing 心跳：微信「正在输入」气泡几秒就消失，每 4s 续一次让它一直亮着。
+  //  ② 进度播报：driver 流式回调的「正在看 X」节流后发出去（≥15s 才发一条，不刷屏）。
+  //  ③ 安抚兜底：超过 22s 没有任何真消息（纯思考、没工具调用），随机发一句安抚。
+  //  真消息（进度/安抚/最终回复）才是微信平台「判活」的依据——只靠 typing 仍会被判「连接不到」。
+  startLiveness(from, ctxToken) {
+    let lastBeat = Date.now();
+    let alive = true;
+    const beat = (textMsg) => {
+      if (!alive || !textMsg) return;
+      lastBeat = Date.now();
+      ilink.sendText(this.account, from, textMsg, ctxToken).catch(() => {});
+      this.push(from, 'assistant', textMsg);
+    };
+    ilink.sendTyping(this.account, from, true);
+    const typingTimer = setInterval(() => { if (alive) ilink.sendTyping(this.account, from, true); }, 4000);
+    const reassureTimer = setInterval(() => { if (alive && Date.now() - lastBeat > 22000) beat(pickReassure()); }, 4000);
+    return {
+      onProgress: (note) => { if (alive && note && Date.now() - lastBeat > 15000) beat('⏳ ' + note); },
+      stop: () => { alive = false; clearInterval(typingTimer); clearInterval(reassureTimer); ilink.sendTyping(this.account, from, false); },
+    };
+  },
+
   async onWechatMsg(msg) {
     if (msg.message_type !== 1) return;           // 只处理用户发来的
     const from = msg.from_user_id;
-    const text = ilink.textFromMsg(msg);
-    if (!from || !text) return;
+    if (!from) return;
+    const { text, medias } = ilink.contentFromMsg(msg);
+    if (medias.length) this.logInbound(msg);      // 抓样本：好实现真读取
+    if (!text && !medias.length) return;          // 真空消息才丢
     this.activeCid = from;
-    this.push(from, 'user', text);
-    ilink.sendTyping(this.account, from, true);
+    // UI/历史里展示用户发了啥；纯媒体没配文字时给个占位
+    this.push(from, 'user', text || `（${medias.map((m) => (m.kind === 'image' ? '图片' : '文件')).join('、')}）`);
+    // 媒体内容暂时读不到（downloadMedia 待样本确认字段）→ 告诉 agent 收到了什么，先有回应不石沉大海
+    const mediaNote = medias.length
+      ? `\n\n[花叔通过微信发来${medias.map((m) => `一个${m.kind === 'image' ? '图片' : '文件'}「${m.name}」`).join('、')}。读取能力还在接入，暂时拿不到内容。请先回应一下你收到了他发的东西、问他想让你做什么，别说自己「无法接收文件」。]`
+      : '';
+    const live = this.startLiveness(from, msg.context_token);
     let reply;
-    try { reply = await this.runAgent(from, text); }
+    try { reply = await this.runAgent(from, (text || '（无文字说明）') + mediaNote, live.onProgress); }
     catch (e) { reply = `（出错）${String(e && e.message || e).slice(0, 300)}`; }
+    finally { live.stop(); }
     const { clean, files } = extractFiles(reply);
     reply = clean || reply;
-    ilink.sendTyping(this.account, from, false);
     if (reply) await ilink.sendText(this.account, from, reply, msg.context_token).catch(() => {});
     // 发文件：相对路径按工作目录解析，逐个发；失败/缺失回一句话，不闷掉
     const sent = [];
