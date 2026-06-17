@@ -67,6 +67,8 @@ const bridge = {
   activeCid: 'desktop',            // UI 当前展示的会话
   account: null,                   // iLink 账号 { token, baseUrl, accountId, userId }
   pollAbort: null,
+  msgQueue: {},                    // cid -> 待处理入站消息队列（轮询只入队、不阻塞，worker 串行消费）
+  draining: {},                    // cid -> 该会话的 worker 是否在跑（同会话不并发，避免跑乱 session）
   avail: null,                     // { codex, claude } CLI 可用性缓存
   expired: false,                  // 已连过但 token 失效（轮询/探活发现）→ 当作未连，需重新扫码
   onConnChange: null,              // 连接态变化回调（主进程用来联动「离开不待机」电源守卫）
@@ -275,13 +277,35 @@ const bridge = {
           }
           fails = 0;
           if (resp.get_updates_buf) { buf = resp.get_updates_buf; ilink.writeJson(f('cursor.json'), { buf }); } // 先推进游标=去重
-          for (const msg of resp.msgs || []) await this.onWechatMsg(msg);
+          // 只入队，绝不在轮询线上 await 跑 agent——否则一个回合（最长 10min）会把整条收消息链路堵死，
+          // 期间新消息根本拉不进来。入队后立刻回去继续 getUpdates，agent 由 worker 按会话串行消费。
+          for (const msg of resp.msgs || []) this.enqueueMsg(msg);
         } catch (e) {
           if (ac.signal.aborted) break;
           fails++; await sleep(fails >= 3 ? 30000 : 2000);
         }
       }
     })();
+  },
+  // 入队 + 唤醒 worker：轮询线只调这个，O(1) 返回。按会话（from_user_id）分队，
+  // 同会话串行消费（不并发跑乱上下文），不同会话各自的 worker 可并行。
+  enqueueMsg(msg) {
+    if (!msg || msg.message_type !== 1) return;   // 只处理用户发来的
+    const from = msg.from_user_id;
+    if (!from) return;
+    (this.msgQueue[from] = this.msgQueue[from] || []).push(msg);
+    this.drainQueue(from);
+  },
+  async drainQueue(from) {
+    if (this.draining[from]) return;              // 该会话已有 worker 在跑
+    this.draining[from] = true;
+    try {
+      while (this.msgQueue[from] && this.msgQueue[from].length) {
+        const msg = this.msgQueue[from].shift();
+        try { await this.onWechatMsg(msg); }
+        catch (e) { console.error('[wechat] onWechatMsg', e); }
+      }
+    } finally { this.draining[from] = false; }
   },
   // 入站媒体原始 JSON 落盘：用来确认图片/文件消息的字段结构，好实现 downloadMedia 真读取。
   logInbound(msg) {
