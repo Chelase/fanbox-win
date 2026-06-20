@@ -27,17 +27,11 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      - name: 安装 Visual Studio Build Tools（Windows）
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          vsversion: '2022'
-
       - name: 构建 node-pty（Windows）
         if: runner.os == 'Windows'
-        run: npm run rebuild
-        env:
-          GYP_MSVS_VERSION: '2022'
+        run: |
+          npm config set msvs_version 2022
+          npm run rebuild
 
       - name: 构建 node-pty（macOS/Linux）
         if: runner.os != 'Windows'
