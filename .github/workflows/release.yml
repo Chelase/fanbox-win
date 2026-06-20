@@ -50,8 +50,21 @@ jobs:
         if: matrix.platform != 'win'
         run: npx electron-rebuild -f -w node-pty
 
-      - name: 打包 Electron 应用
-        run: npm run dist:${{ matrix.platform }}
+      - name: 打包 Electron 应用（Windows）
+        if: matrix.platform == 'win'
+        run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 打包 Electron 应用（macOS）
+        if: matrix.platform == 'mac'
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 打包 Electron 应用（Linux）
+        if: matrix.platform == 'linux'
+        run: npm run dist:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

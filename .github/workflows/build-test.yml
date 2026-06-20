@@ -39,7 +39,20 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run verify:build
 
-      - name: 打包测试
-        run: npm run dist:${{ runner.os == 'Windows' && 'win' || runner.os == 'macOS' && 'mac' || 'linux' }}
+      - name: 打包测试（Windows）
+        if: runner.os == 'Windows'
+        run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 打包测试（macOS）
+        if: runner.os == 'macOS'
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 打包测试（Linux）
+        if: runner.os == 'Linux'
+        run: npm run dist:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
