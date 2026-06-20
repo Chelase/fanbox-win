@@ -44,9 +44,7 @@ jobs:
 
       - name: 构建 node-pty（Windows）
         if: matrix.platform == 'win'
-        run: |
-          npm config set msvs_version 2022
-          npm run rebuild
+        run: npm run rebuild
 
       - name: 构建 node-pty（macOS/Linux）
         if: matrix.platform != 'win'
