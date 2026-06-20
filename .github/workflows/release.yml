@@ -44,7 +44,7 @@ jobs:
 
       - name: 构建 node-pty（Windows）
         if: matrix.platform == 'win'
-        run: npm run rebuild
+        run: npm run rebuild:legacy
 
       - name: 构建 node-pty（macOS/Linux）
         if: matrix.platform != 'win'
