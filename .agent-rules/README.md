@@ -1,5 +1,19 @@
 # fanbox-win Agent 规则统筹
 
+## 0. 技能来源
+
+本规则链路由以下技能初始化：
+
+| 字段 | 值 |
+|---|---|
+| 技能名称 | `project-rule-chain-init` |
+| 技能版本 | v1.0.0 |
+| 技能路径 | `D:\code\skills\github\project-rule-chain-init/` |
+| 初始化日期 | 2026-06-20 |
+| 技能仓库 | https://github.com/Chelase/project-rule-chain-init |
+
+> Agent 开工时可读取技能仓库 `VERSION` 文件对比版本，若有更新会提示合并。
+
 ## 1. 目的
 
 `.agent-rules/` 是本项目的 Agent 规则统筹、机制梳理、开发计划索引与跨会话接力目录。
