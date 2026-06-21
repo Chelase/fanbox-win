@@ -2489,6 +2489,9 @@ function bindEvents() {
   $('#btn-terminal').onclick = () => term.toggle();
   $('#term-claude').onclick = () => { wechatView.close(); term.launchAgent('claude --dangerously-skip-permissions'); };
   $('#term-codex').onclick = () => { wechatView.close(); term.launchAgent('codex'); };
+  $('#term-opencode').onclick = () => { wechatView.close(); term.launchAgent('opencode'); };
+  $('#term-add-agent').onclick = () => showCustomAgentDialog();
+  loadCustomAgents();
   usagePanel.bind();
   shotTray.init();
   $('#skills-entry').onclick = () => skillsView.show();
@@ -2507,6 +2510,102 @@ function bindEvents() {
   muteBtn.onclick = () => { state.muted = !state.muted; localStorage.setItem('fb_muted', state.muted ? '1' : '0'); syncMute(); if (!state.muted) playChime('tick'); };
   $('#term-close').onclick = () => term.close();
   $('#btn-sidebar').onclick = () => toggleSidebar();
+
+  // 自定义 Agent 管理
+  async function loadCustomAgents() {
+    try {
+      const data = await api('/api/custom-agents');
+      state.customAgents = data.agents || [];
+      renderCustomAgents();
+    } catch {}
+  }
+
+  function renderCustomAgents() {
+    const container = $('#custom-agents-container');
+    if (!container) return;
+    container.innerHTML = '';
+    (state.customAgents || []).forEach((agent) => {
+      const btn = document.createElement('button');
+      btn.className = 'agent-launch custom-agent';
+      btn.title = `启动 ${agent.name}：${agent.command}`;
+      btn.textContent = agent.name.substring(0, 2).toUpperCase();
+      btn.onclick = () => { wechatView.close(); term.launchAgent(agent.command); };
+      btn.oncontextmenu = (e) => {
+        e.preventDefault();
+        popupMenu(e, [
+          { label: `编辑 ${agent.name}`, fn: () => showCustomAgentDialog(agent) },
+          { label: `删除 ${agent.name}`, danger: true, fn: () => deleteCustomAgent(agent) },
+        ]);
+      };
+      container.appendChild(btn);
+    });
+  }
+
+  function showCustomAgentDialog(editAgent) {
+    const isEdit = !!editAgent;
+    const dialog = document.createElement('div');
+    dialog.className = 'input-dialog';
+    dialog.innerHTML = `
+      <div class="dialog-title">${isEdit ? '编辑 Agent' : '添加自定义 Agent'}</div>
+      <div class="dialog-field">
+        <label>名称</label>
+        <input id="agent-name" type="text" value="${isEdit ? editAgent.name : ''}" placeholder="例如：KimiCode" />
+      </div>
+      <div class="dialog-field">
+        <label>命令</label>
+        <input id="agent-command" type="text" value="${isEdit ? editAgent.command : ''}" placeholder="例如：kimicode" />
+      </div>
+      <div class="dialog-hint">命令会在终端中执行，支持空格分隔的参数</div>
+      <div class="dialog-actions">
+        <button class="dialog-cancel">取消</button>
+        <button class="dialog-confirm">${isEdit ? '保存' : '添加'}</button>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    const nameInput = dialog.querySelector('#agent-name');
+    const cmdInput = dialog.querySelector('#agent-command');
+    nameInput.focus();
+
+    dialog.querySelector('.dialog-cancel').onclick = () => dialog.remove();
+    dialog.querySelector('.dialog-confirm').onclick = async () => {
+      const name = nameInput.value.trim();
+      const command = cmdInput.value.trim();
+      if (!name || !command) { toast('名称和命令不能为空', true); return; }
+
+      let agents = [...(state.customAgents || [])];
+      if (isEdit) {
+        agents = agents.map(a => a.id === editAgent.id ? { ...a, name, command } : a);
+      } else {
+        agents.push({ id: Date.now().toString(36), name, command });
+      }
+
+      try {
+        await apiPost('/api/custom-agents', { agents });
+        state.customAgents = agents;
+        renderCustomAgents();
+        dialog.remove();
+        toast(isEdit ? '已更新' : '已添加');
+      } catch { toast('保存失败', true); }
+    };
+
+    // Enter 提交
+    dialog.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') dialog.querySelector('.dialog-confirm').click();
+      if (e.key === 'Escape') dialog.remove();
+    });
+  }
+
+  async function deleteCustomAgent(agent) {
+    const agents = (state.customAgents || []).filter(a => a.id !== agent.id);
+    try {
+      await apiPost('/api/custom-agents', { agents });
+      state.customAgents = agents;
+      renderCustomAgents();
+      toast('已删除');
+    } catch { toast('删除失败', true); }
+  }
+
   $('#file-follow').onclick = () => setFileFollow(!follow.on);
   // 定位文件按钮已撤（双击终端 tab 即可定位，见 term.locateCwd / renderTabs 的 ondblclick）
   // 终端随窗口尺寸变化重排，避免 TUI 错位

@@ -2313,6 +2313,17 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/project-info') {
       return sendJSON(res, 200, await getProjectInfo(qp.get('path') || HOME));
     }
+    if (p === '/api/custom-agents') {
+      const cfg = await readConfig();
+      return sendJSON(res, 200, { agents: cfg.customAgents || [] });
+    }
+    if (p === '/api/custom-agents' && req.method === 'POST') {
+      const body = await readBody(req);
+      const cfg = await updateConfig((c) => {
+        c.customAgents = body.agents || [];
+      });
+      return sendJSON(res, 200, { agents: cfg.customAgents || [] });
+    }
 
     // 静态资源
     return await serveStatic(req, res, p);
