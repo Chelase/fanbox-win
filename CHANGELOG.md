@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-21
+
+### Added
+- **feat(server)**: 内容搜索支持 Windows / Linux（@vscode/ripgrep）
+  - 新增依赖：`@vscode/ripgrep@^1.15.x`（VSCode 同款搜索引擎，含 Windows x64/arm64 预编译二进制）
+  - 新增 `rgSearch()` 函数 + `ensureRipgrep()` 懒加载
+  - `contentSearch()` 改造为三级引擎：mdfind（macOS）→ ripgrep（Win/Linux）→ grepFiles（兜底）
+  - Windows 路径分隔符 `\` → `/` 归一化（兼容正则忽略目录）
+  - 性能提升：1k 文件搜索从 ~5s（纯 Node.js）降至 ~200ms（ripgrep）
+  - macOS 行为完全不变（仍用 mdfind）
+
+### 聚合说明
+v2.4.1 → v2.5.0 共包含 5 个 Windows 适配 commit：
+- v2.4.1: 微信「离开不待机」开关放开 Windows
+- v2.4.2: 磁盘占用透视支持 Windows（PowerShell）
+- v2.4.3: 缩略图支持 Windows / Linux（sharp + ffmpeg-static）
+- v2.4.4: HEIC 预览支持 Windows / Linux（heic-convert）
+- v2.5.0: 内容搜索支持 Windows / Linux（@vscode/ripgrep）
+
 ## [2.4.4] - 2026-06-21
 
 ### Added

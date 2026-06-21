@@ -507,22 +507,72 @@ function mdfind(args) {
     });
   });
 }
+
+// ---------- @vscode/ripgrep 引擎：Windows / Linux 的内容搜索快速路径 ----------
+// ripgrep 是用 Rust 写的极速 grep 工具；@vscode/ripgrep 包自带 Windows x64/arm64 预编译二进制
+let rgPath = null;
+function ensureRipgrep() {
+  if (!rgPath) {
+    try { rgPath = require('@vscode/ripgrep').rgPath; }
+    catch (err) { console.log('[search] @vscode/ripgrep 加载失败:', err.message); }
+  }
+  return rgPath;
+}
+
+function rgSearch(query, root) {
+  const rg = ensureRipgrep();
+  if (!rg) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const args = [
+      '--files-with-matches',   // 只列出匹配文件，不输出匹配内容
+      '--hidden',                // 包含隐藏文件
+      '-i',                      // 大小写不敏感
+      '--max-count', '1',        // 每个文件最多 1 个匹配
+      '-g', '!node_modules',
+      '-g', '!.git',
+      '-g', '!dist',
+      '-g', '!build',
+      '-g', '!target',
+      '-g', '!Library/Caches',
+      '--', query, root
+    ];
+    execFile(rg, args, { timeout: 6000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        resolve(String(stdout).split('\n').filter(Boolean));
+      });
+  });
+}
+
 async function contentSearch(query, rootPath) {
   const root = resolvePath(rootPath);
   const q = (query || '').trim();
   if (!q || q.length < 2) return { results: [] };
   // 属性查询而非自由文本：CJK 子串匹配更稳；[cd] = 忽略大小写/音调
   const esc = q.replace(/[\\"*]/g, '');
-  const paths = await mdfind(['-onlyin', root, `(kMDItemTextContent == "*${esc}*"cd) || (kMDItemDisplayName == "*${esc}*"cd)`]);
+
+  // 三级搜索引擎：mdfind (macOS) → ripgrep (Win/Linux) → grepFiles (兜底)
+  let paths = null;
+  let engine = 'grep';
+  if (process.platform === 'darwin') {
+    paths = await mdfind(['-onlyin', root, `(kMDItemTextContent == "*${esc}*"cd) || (kMDItemDisplayName == "*${esc}*"cd)`]);
+    engine = paths && paths.length ? 'spotlight' : 'grep';
+  } else {
+    paths = await rgSearch(esc, root);
+    engine = paths && paths.length ? 'ripgrep' : 'ripgrep-fallback';
+  }
+
   if (paths === null || !paths.length) {
-    const fb = await grepFiles(query, rootPath); // mdfind 不可用或无命中 → 原 grep 兜底
-    return { ...fb, engine: 'grep' };
+    const fb = await grepFiles(query, rootPath); // 所有引擎都无命中 → grepFiles 兜底
+    return { ...fb, engine };
   }
   const results = [];
   const deadline = Date.now() + 2500;
   for (const p of paths) {
     if (results.length >= 60 || Date.now() > deadline) break;
-    if (/\/(node_modules|\.git|Library\/Caches)\//.test(p)) continue;
+    // macOS 路径分隔符是 /，Windows 是 \。用统一的分隔符检查
+    const norm = p.replace(/\\/g, '/');
+    if (/\/(node_modules|\.git|Library\/Caches|dist|build|target)(\/|$)/.test(norm)) continue;
     let st; try { st = await fsp.stat(p); } catch { continue; }
     if (st.isDirectory()) continue;
     const name = path.basename(p);
@@ -544,7 +594,7 @@ async function contentSearch(query, rootPath) {
     }
     if (hits.length) r.hits = hits;
   }
-  return { results, truncated: paths.length > results.length, engine: 'spotlight' };
+  return { results, truncated: paths.length > results.length, engine };
 }
 
 async function recentFiles(rootPath) {
