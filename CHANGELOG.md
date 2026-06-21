@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-06-21
+
+### Added
+- **feat(server)**: 磁盘占用透视支持 Windows
+  - 新增 `getDirSizesWindows()` 辅助函数，调用 PowerShell `Get-ChildItem -Recurse | Measure-Object -Sum`
+  - `-ErrorAction SilentlyContinue` 跳过无权限子目录（与 macOS `du` 行为对齐）
+  - macOS / Linux 路径完全不变（仍用 `du -sk`）
+  - 零新增依赖
+
 ## [2.4.1] - 2026-06-21
 
 ### Added

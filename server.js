@@ -967,12 +967,32 @@ async function diskUsage(p) {
     try { const st = await fsp.lstat(full); if (st.isFile()) items.push({ name: d.name, size: st.size, isDir: false }); } catch { /* */ }
   }));
   if (dirs.length) {
-    const out = await new Promise((resolve) => {
-      execFile('du', ['-sk', ...dirs], { timeout: 120000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => resolve(stdout || ''));
-    });
-    for (const line of out.split('\n')) {
-      const m = line.match(/^(\d+)\s+(.+)$/);
-      if (m) items.push({ name: path.basename(m[2]), size: Number(m[1]) * 1024, isDir: true });
+    if (PLATFORM === 'win32') {
+      // Windows: PowerShell 批量查询（-ErrorAction SilentlyContinue 跳过无权限子目录）
+      const psResults = await Promise.all(dirs.map(async (dir) => {
+        const escDir = dir.replace(/'/g, "''");
+        const ps = `(Get-ChildItem -LiteralPath '${escDir}' -Force -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum`;
+        return new Promise((resolve) => {
+          execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
+            { timeout: 120000, maxBuffer: 8 * 1024 * 1024 },
+            (err, stdout) => {
+              const bytes = parseInt((stdout || '0').trim(), 10);
+              resolve({ path: dir, size: isNaN(bytes) ? 0 : bytes });
+            });
+        });
+      }));
+      for (const r of psResults) {
+        items.push({ name: path.basename(r.path), size: r.size, isDir: true });
+      }
+    } else {
+      // macOS / Linux: 保持 du -sk
+      const out = await new Promise((resolve) => {
+        execFile('du', ['-sk', ...dirs], { timeout: 120000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => resolve(stdout || ''));
+      });
+      for (const line of out.split('\n')) {
+        const m = line.match(/^(\d+)\s+(.+)$/);
+        if (m) items.push({ name: path.basename(m[2]), size: Number(m[1]) * 1024, isDir: true });
+      }
     }
   }
   items.sort((a, b) => b.size - a.size);
