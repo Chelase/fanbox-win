@@ -1375,6 +1375,14 @@ function ensureThumbLibs() {
     try { ffmpegPath = require('ffmpeg-static'); } catch (err) { console.log('[thumb] ffmpeg-static 加载失败:', err.message); }
   }
 }
+// Windows / Linux HEIC 解码引擎：heic-convert（纯 JS，跨平台，无需 native 编译）
+let heicConvertModule = null;
+function ensureHeicLib() {
+  if (process.platform === 'darwin') return; // macOS 用 sips
+  if (!heicConvertModule) {
+    try { heicConvertModule = require('heic-convert'); } catch (err) { console.log('[heic] heic-convert 加载失败:', err.message); }
+  }
+}
 // 图片走 sips 缩放（快）；视频/PDF/其它走 qlmanage QuickLook 抽帧
 async function generateThumb(src, e, size, cacheFile, isImg) {
   await fsp.mkdir(THUMB_DIR, { recursive: true });
@@ -1471,7 +1479,20 @@ async function serveHeicAsJpeg(req, res, file, st) {
   if (fs.existsSync(cacheFile)) return send();
   let pr = thumbInflight.get(cacheFile);
   if (!pr) {
-    pr = (async () => { await fsp.mkdir(THUMB_DIR, { recursive: true }); await run('sips', ['-s', 'format', 'jpeg', file, '--out', cacheFile]); })()
+    pr = (async () => {
+      await fsp.mkdir(THUMB_DIR, { recursive: true });
+      if (process.platform === 'darwin') {
+        // macOS: 保持 sips 原逻辑
+        await run('sips', ['-s', 'format', 'jpeg', file, '--out', cacheFile]);
+      } else {
+        // Windows / Linux: heic-convert（纯 JS，跨平台，无需 native 编译）
+        ensureHeicLib();
+        if (!heicConvertModule) throw new Error('heic-convert 未加载');
+        const data = await fsp.readFile(file);
+        const jpegBuffer = await heicConvertModule({ buffer: data, format: 'JPEG', quality: 1 });
+        await fsp.writeFile(cacheFile, jpegBuffer);
+      }
+    })()
       .finally(() => thumbInflight.delete(cacheFile));
     thumbInflight.set(cacheFile, pr);
   }

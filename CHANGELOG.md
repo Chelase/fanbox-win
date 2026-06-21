@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-06-21
+
+### Added
+- **feat(server)**: HEIC 图片预览支持 Windows / Linux
+  - 新增依赖：`heic-convert@^2.1.0`（纯 JS，跨平台，无需 native 编译）
+  - `serveHeicAsJpeg()` 函数改造：`process.platform === 'darwin'` 保留 sips；其他平台走 heic-convert
+  - heic-convert 直接输出 JPEG Buffer（quality=1），零额外依赖
+  - LRU 缓存 + 幂等生成（与 macOS 行为对齐）
+  - macOS 路径完全不变
+
+> ⚠️ 已知限制：未在 Windows 上做端到端 HEIC 文件验证（本地无测试文件），实际效果待用户反馈。
+
 ## [2.4.2] - 2026-06-21
 
 ### Added
