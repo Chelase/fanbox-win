@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-20
+
+### Added
+- 项目识别增强：支持 15 种语言/框架（Vue、React、Angular、Next.js、Nuxt、Svelte、Django、Flask、FastAPI、Spring Boot、Laravel、.NET、Rust、Go、Ruby、Swift、Dart）
+- 路径复制功能：右键菜单新增「复制绝对路径」和「复制相对路径」
+- 项目信息卡片：显示当前目录的框架类型和运行命令
+- 快捷运行按钮：一键运行项目（支持多 scripts 选择）
+- API `/api/path-info` — 获取路径信息（绝对路径 + 相对路径）
+- API `/api/project-info` — 获取项目信息（框架类型 + 运行命令）
+
+### Changed
+- `projectOf()` 函数改为异步，支持更细粒度的框架检测
+- 前端右键菜单新增路径复制选项
+
 ## [2.3.1] - 2026-06-20
 
 ### Added

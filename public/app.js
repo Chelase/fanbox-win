@@ -287,6 +287,7 @@ async function navigate(p, pushHistory = true) {
     state.cursor = -1;
     render();
     renderRootsActive();
+    renderProjectInfo();
     // 联动：监听此目录 + 各终端项目目录的文件变化（agent 改文件→自动刷新）
     updateWatches();
     // 手动跳目录 = 接管浏览，文件跟随让位（跟随自己发起的导航除外）
@@ -308,6 +309,79 @@ function goBack() { if (state.history.length) navigate(state.history.pop(), fals
 function goUp() { if (state.parent && state.parent !== state.cwd) navigate(state.parent); }
 
 // ---------- 渲染 ----------
+async function renderProjectInfo() {
+  const el = $('#project-info');
+  if (!el) return;
+  if (!state.cwd || state.skillsMode || state.recentMode) {
+    el.classList.add('hidden');
+    return;
+  }
+  try {
+    const info = await api('/api/project-info?path=' + encodeURIComponent(state.cwd));
+    if (!info || !info.type) {
+      el.classList.add('hidden');
+      return;
+    }
+    const frameworkNames = {
+      'vue': 'Vue', 'react': 'React', 'nextjs': 'Next.js', 'nuxt': 'Nuxt',
+      'angular': 'Angular', 'svelte': 'Svelte', 'express': 'Express', 'node': 'Node.js',
+      'django': 'Django', 'flask': 'Flask', 'fastapi': 'FastAPI', 'python': 'Python',
+      'spring-boot': 'Spring Boot', 'maven': 'Maven', 'gradle': 'Gradle',
+      'laravel': 'Laravel', 'symfony': 'Symfony', 'php': 'PHP',
+      'dotnet': '.NET', 'aspnet-core': 'ASP.NET Core', 'blazor': 'Blazor',
+      'maui': 'MAUI', 'wpf': 'WPF', 'winforms': 'WinForms',
+      'rust': 'Rust', 'go': 'Go', 'ruby': 'Ruby', 'swift': 'Swift', 'dart': 'Dart',
+      'web': 'Web', 'git': 'Git'
+    };
+    const name = frameworkNames[info.type] || info.type;
+    const icon = getProjectIcon(info.type);
+    let scriptsHtml = '';
+    if (info.scripts && Object.keys(info.scripts).length > 0) {
+      const scriptNames = Object.keys(info.scripts).slice(0, 5);
+      scriptsHtml = `<div class="project-scripts">${scriptNames.map(s => `<button class="script-btn" onclick="runScript('${s}')" title="${info.scripts[s]}">${s}</button>`).join('')}</div>`;
+    }
+    el.innerHTML = `
+      <div class="project-card">
+        <span class="project-icon">${icon}</span>
+        <span class="project-name">${name}</span>
+        ${info.runCommand ? `<button class="project-run" onclick="runProject()" title="运行: ${info.runCommand}">▶ 运行</button>` : ''}
+        ${scriptsHtml}
+      </div>
+    `;
+    el.classList.remove('hidden');
+  } catch {
+    el.classList.add('hidden');
+  }
+}
+
+function getProjectIcon(type) {
+  const icons = {
+    'vue': '💚', 'react': '⚛️', 'nextjs': '▲', 'nuxt': '💚',
+    'angular': '🅰️', 'svelte': '🔥', 'express': '🚂', 'node': '💚',
+    'django': '🐍', 'flask': '🐍', 'fastapi': '🐍', 'python': '🐍',
+    'spring-boot': '☕', 'maven': '☕', 'gradle': '🐘',
+    'laravel': '🐘', 'symfony': '🎼', 'php': '🐘',
+    'dotnet': '🟣', 'aspnet-core': '🟣', 'blazor': '🟣',
+    'maui': '📱', 'wpf': '🪟', 'winforms': '🪟',
+    'rust': '🦀', 'go': '🐹', 'ruby': '💎', 'swift': '🦅', 'dart': '🎯',
+    'web': '🌐', 'git': '📁'
+  };
+  return icons[type] || '📁';
+}
+
+async function runProject() {
+  try {
+    const info = await api('/api/project-info?path=' + encodeURIComponent(state.cwd));
+    if (info && info.runCommand) {
+      term.runInDir(state.cwd, info.runCommand);
+    }
+  } catch {}
+}
+
+async function runScript(name) {
+  term.runInDir(state.cwd, `npm run ${name}`);
+}
+
 function render() {
   renderBreadcrumb();
   renderFiles();
@@ -1174,8 +1248,15 @@ async function openWith(p, withApp) {
   } else toast('打开失败：' + (r.error || ''), true);
 }
 async function copyPath(p) {
-  try { await navigator.clipboard.writeText(p); toast('已复制路径'); }
+  try { await navigator.clipboard.writeText(p); toast('已复制绝对路径'); }
   catch { toast('复制失败（浏览器限制），路径：' + p, true); }
+}
+async function copyRelativePath(p) {
+  try {
+    const data = await api('/api/path-info?path=' + encodeURIComponent(p) + '&root=' + encodeURIComponent(state.cwd));
+    await navigator.clipboard.writeText(data.relative);
+    toast('已复制相对路径');
+  } catch { toast('复制失败', true); }
 }
 // 记录最近打开：内部预览/编辑也算「打开过」，本地即时置顶 + 异步落库
 function recordRecent(p) {
@@ -1738,7 +1819,8 @@ function showContextMenu(ev, e) {
   if (e.kind === 'image') items.push({ label: '编辑图片', fn: () => enterImageEdit(e) });
   items.push({ label: '在编辑器打开', fn: () => openWith(e.path, 'editor') });
   items.push({ label: '在 Finder 显示', fn: () => openWith(e.path, 'reveal') });
-  items.push({ label: '复制路径', fn: () => copyPath(e.path) });
+  items.push({ label: '复制绝对路径', fn: () => copyPath(e.path) });
+  items.push({ label: '复制相对路径', fn: () => copyRelativePath(e.path) });
   items.push({ sep: true });
   items.push({ label: isFav(e.path) ? '取消收藏' : '收藏', fn: () => toggleFav(e) });
   items.push({ label: '重命名…', fn: () => doRename(e) });

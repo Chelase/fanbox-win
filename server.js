@@ -65,15 +65,171 @@ function ext(name) {
   return name.slice(i + 1).toLowerCase();
 }
 
+// 运行命令映射
+const RUN_COMMANDS = {
+  // Node.js
+  'vue': 'npm run serve',
+  'react': 'npm start',
+  'nextjs': 'npm run dev',
+  'nuxt': 'npm run dev',
+  'angular': 'ng serve',
+  'express': 'npm start',
+  'svelte': 'npm run dev',
+  'node': 'npm start',
+  // Python
+  'django': 'python manage.py runserver',
+  'flask': 'flask run',
+  'fastapi': 'uvicorn main:app --reload',
+  'python': 'python main.py',
+  // Java
+  'spring-boot': 'mvn spring-boot:run',
+  'maven': 'mvn exec:java',
+  'gradle': 'gradle run',
+  // PHP
+  'laravel': 'php artisan serve',
+  'symfony': 'symfony serve',
+  'php': 'php -S localhost:8000',
+  // .NET
+  'dotnet': 'dotnet run',
+  'aspnet-core': 'dotnet run',
+  'blazor': 'dotnet run',
+  'maui': 'dotnet build',
+  'wpf': 'dotnet run',
+  'winforms': 'dotnet run',
+  // 其他
+  'rust': 'cargo run',
+  'go': 'go run .',
+  'ruby': 'rails server',
+  'swift': 'swift run',
+  'dart': 'flutter run',
+};
+
+// 检测 Node.js 框架
+async function detectNodeFramework(dirPath) {
+  try {
+    const pkg = JSON.parse(await fsp.readFile(path.join(dirPath, 'package.json'), 'utf8'));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    if (deps.vue || deps['@vue/cli-service']) return 'vue';
+    if (deps.react || deps['react-dom']) return 'react';
+    if (deps.next) return 'nextjs';
+    if (deps.nuxt || deps['@nuxt/kit']) return 'nuxt';
+    if (deps['@angular/core']) return 'angular';
+    if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+    if (deps.express) return 'express';
+    return 'node';
+  } catch { return 'node'; }
+}
+
+// 检测 Python 框架
+async function detectPythonFramework(dirPath) {
+  try {
+    const names = await fsp.readdir(dirPath);
+    if (names.includes('manage.py')) return 'django';
+    try {
+      const req = await fsp.readFile(path.join(dirPath, 'requirements.txt'), 'utf8');
+      if (req.includes('flask')) return 'flask';
+      if (req.includes('django')) return 'django';
+      if (req.includes('fastapi')) return 'fastapi';
+    } catch {}
+    return 'python';
+  } catch { return 'python'; }
+}
+
+// 检测 Maven 框架
+async function detectMavenFramework(dirPath) {
+  try {
+    const pom = await fsp.readFile(path.join(dirPath, 'pom.xml'), 'utf8');
+    if (pom.includes('spring-boot')) return 'spring-boot';
+    if (pom.includes('quarkus')) return 'quarkus';
+    if (pom.includes('micronaut')) return 'micronaut';
+    return 'maven';
+  } catch { return 'maven'; }
+}
+
+// 检测 PHP 框架
+async function detectPhpFramework(dirPath) {
+  try {
+    const composer = JSON.parse(await fsp.readFile(path.join(dirPath, 'composer.json'), 'utf8'));
+    const deps = { ...composer.require, ...composer['require-dev'] };
+    if (deps['laravel/framework']) return 'laravel';
+    if (deps['symfony/framework-bundle']) return 'symfony';
+    if (deps['yiisoft/yii2']) return 'yii';
+    return 'php';
+  } catch { return 'php'; }
+}
+
+// 检测 .NET 框架
+async function detectDotNetFramework(dirPath) {
+  try {
+    const files = await fsp.readdir(dirPath);
+    const csprojFile = files.find(f => f.endsWith('.csproj'));
+    if (csprojFile) {
+      const content = await fsp.readFile(path.join(dirPath, csprojFile), 'utf8');
+      if (content.includes('Microsoft.Maui')) return 'maui';
+      if (content.includes('Microsoft.AspNetCore')) return 'aspnet-core';
+      if (content.includes('Blazor')) return 'blazor';
+      if (content.includes('Microsoft.WindowsDesktop.App')) return 'wpf';
+      if (content.includes('System.Windows.Forms')) return 'winforms';
+      return 'dotnet';
+    }
+    return null;
+  } catch { return null; }
+}
+
+// 检查目录下是否有 .csproj 文件
+async function hasCsprojFile(dirPath) {
+  try {
+    const files = await fsp.readdir(dirPath);
+    return files.some(f => f.endsWith('.csproj'));
+  } catch { return false; }
+}
+
 // 从一组文件/目录名推断项目类型（签名文件），供当前目录徽章 + 子目录浅探共用
-function projectOf(names) {
-  if (names.has('package.json')) return 'node';
+async function projectOf(names, dirPath) {
+  if (names.has('package.json')) return detectNodeFramework(dirPath);
   if (names.has('index.html')) return 'web';
-  if (names.has('requirements.txt') || names.has('pyproject.toml')) return 'python';
+  if (names.has('requirements.txt') || names.has('pyproject.toml')) return detectPythonFramework(dirPath);
   if (names.has('Cargo.toml')) return 'rust';
   if (names.has('go.mod')) return 'go';
+  if (names.has('pom.xml')) return detectMavenFramework(dirPath);
+  if (names.has('build.gradle')) return 'gradle';
+  if (names.has('composer.json')) return detectPhpFramework(dirPath);
+  if (names.has('Gemfile')) return 'ruby';
+  if (names.has('Package.swift')) return 'swift';
+  if (names.has('pubspec.yaml')) return 'dart';
+  if (await hasCsprojFile(dirPath)) return detectDotNetFramework(dirPath);
   if (names.has('.git')) return 'git';
   return null;
+}
+
+// 获取路径信息（绝对路径 + 相对路径）
+async function getPathInfo(filePath, projectRoot) {
+  const abs = resolvePath(filePath);
+  const root = projectRoot ? resolvePath(projectRoot) : HOME;
+  const rel = path.relative(root, abs);
+  return { absolute: abs, relative: rel };
+}
+
+// 获取项目信息
+async function getProjectInfo(dirPath) {
+  const dir = resolvePath(dirPath);
+  try {
+    const dirents = await fsp.readdir(dir, { withFileTypes: true });
+    const names = new Set(dirents.map(d => d.name));
+    const framework = await projectOf(names, dir);
+    const runCommand = RUN_COMMANDS[framework] || null;
+    let scripts = null;
+    
+    // 如果是 Node.js 项目，读取 package.json scripts
+    if (names.has('package.json')) {
+      try {
+        const pkg = JSON.parse(await fsp.readFile(path.join(dir, 'package.json'), 'utf8'));
+        if (pkg.scripts) scripts = pkg.scripts;
+      } catch {}
+    }
+    
+    return { type: framework, framework, runCommand, scripts };
+  } catch { return { type: null, framework: null, runCommand: null, scripts: null }; }
 }
 
 function kindOf(name, isDir) {
@@ -176,7 +332,7 @@ async function listDir(dirPath) {
   });
   // 识别项目类型（含 package.json / .git / index.html 等）
   const names = new Set(entries.map((e) => e.name));
-  const project = projectOf(names);
+  const project = await projectOf(names, dir);
 
   // 给每个子目录浅探一次项目类型，文件卡片上标徽章——「一下午起的十个项目」一眼认出是 node/web/py
   // 成本受控：只探目录、且总数封顶；大目录（>80 个子目录）跳过，避免拖慢列表
@@ -185,7 +341,7 @@ async function listDir(dirPath) {
     await Promise.all(subDirs.map(async (e) => {
       try {
         const inner = await fsp.readdir(e.path);
-        e.project = projectOf(new Set(inner));
+        e.project = await projectOf(new Set(inner), e.path);
       } catch { /* 无权限等，跳过 */ }
     }));
   }
@@ -2150,6 +2306,12 @@ const server = http.createServer(async (req, res) => {
       }
       const cfg = await readConfig();
       return sendJSON(res, 200, { favorites: cfg.favorites || [], recentOpened: cfg.recentOpened || [] });
+    }
+    if (p === '/api/path-info') {
+      return sendJSON(res, 200, await getPathInfo(qp.get('path'), qp.get('root')));
+    }
+    if (p === '/api/project-info') {
+      return sendJSON(res, 200, await getProjectInfo(qp.get('path') || HOME));
     }
 
     // 静态资源

@@ -223,6 +223,26 @@ kbd {
 /* 项目配对色点：和终端标签的图标同色，扫一眼知道文件区与哪个终端是一伙的 */
 .breadcrumb .crumb-proj { width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; flex: none; align-self: center; }
 
+/* 项目信息卡片 */
+.project-info { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
+.project-info.hidden { display: none; }
+.project-card { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.project-icon { font-size: 16px; }
+.project-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.project-run {
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--accent);
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.project-run:hover { background: var(--accent); color: var(--accent-ink); }
+.project-scripts { display: flex; gap: 4px; margin-left: 8px; }
+.script-btn {
+  padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--bg-3); color: var(--text-dim); font-size: 11px; font-family: var(--font-mono);
+  cursor: pointer; transition: all 0.15s;
+}
+.script-btn:hover { color: var(--text); border-color: var(--accent); }
+
 /* 右侧操作区永不收缩变形——挤压压力全部交给面包屑（它能横向滚动） */
 .topbar-actions { display: flex; align-items: center; gap: 10px; flex: none; white-space: nowrap; }
 /* 顶栏越窄越往下藏，低频控件先走，终端按钮永远保住（tb-* 由 ResizeObserver 按顶栏自身宽度打） */
