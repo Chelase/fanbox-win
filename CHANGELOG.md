@@ -15,6 +15,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - macOS / Linux 路径完全不变（仍用 `du -sk`）
   - 零新增依赖
 
+## [2.4.3] - 2026-06-21
+
+### Added
+- **feat(server)**: 缩略图支持 Windows / Linux
+  - 新增依赖：`sharp@^0.33.5`（图片缩放，libvips 内核）+ `ffmpeg-static@^5.2.0`（视频/PDF 抽帧）
+  - 重构 `generateThumb()` 函数：`process.platform === 'darwin'` 保留 sips/qlmanage；其他平台走 sharp + ffmpeg-static
+  - sharp 支持：JPG / PNG / WebP / AVIF / TIFF / GIF（首帧）/ BMP
+  - ffmpeg-static 支持：MP4 / MOV / MKV / WebM / AVI / PDF（首帧抽图）
+  - 零进程启动开销（sharp 进程内调用）；ffmpeg-static 二进制约 70MB 已打包进 node_modules
+  - macOS 路径完全不变
+
 ## [2.4.1] - 2026-06-21
 
 ### Added

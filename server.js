@@ -1363,22 +1363,57 @@ const thumbInflight = new Map(); // cacheFile -> Promise，去重并发生成
 function run(cmd, args) {
   return new Promise((resolve, reject) => execFile(cmd, args, { timeout: 15000 }, (e) => (e ? reject(e) : resolve())));
 }
+// Windows/Linux 缩略图引擎：sharp (图片) + ffmpeg-static (视频/PDF)
+let sharpModule = null;
+let ffmpegPath = null;
+function ensureThumbLibs() {
+  if (process.platform === 'darwin') return; // macOS 用 sips/qlmanage
+  if (!sharpModule) {
+    try { sharpModule = require('sharp'); } catch (err) { console.log('[thumb] sharp 加载失败:', err.message); }
+  }
+  if (!ffmpegPath) {
+    try { ffmpegPath = require('ffmpeg-static'); } catch (err) { console.log('[thumb] ffmpeg-static 加载失败:', err.message); }
+  }
+}
 // 图片走 sips 缩放（快）；视频/PDF/其它走 qlmanage QuickLook 抽帧
 async function generateThumb(src, e, size, cacheFile, isImg) {
   await fsp.mkdir(THUMB_DIR, { recursive: true });
-  if (isImg) {
-    const fmt = cacheFile.endsWith('.png') ? 'png' : 'jpeg';
-    await run('sips', ['-s', 'format', fmt, '-Z', String(size), src, '--out', cacheFile]);
+
+  // macOS: 保持 sips + qlmanage 原逻辑
+  if (process.platform === 'darwin') {
+    if (isImg) {
+      const fmt = cacheFile.endsWith('.png') ? 'png' : 'jpeg';
+      await run('sips', ['-s', 'format', fmt, '-Z', String(size), src, '--out', cacheFile]);
+      return;
+    }
+    const tmpDir = path.join(THUMB_DIR, '_ql_' + process.pid + '_' + crypto.randomBytes(4).toString('hex'));
+    await fsp.mkdir(tmpDir, { recursive: true });
+    try {
+      await run('qlmanage', ['-t', '-s', String(size), '-o', tmpDir, src]);
+      const png = (await fsp.readdir(tmpDir)).find((f) => f.endsWith('.png'));
+      if (!png) throw new Error('no thumb');
+      await fsp.rename(path.join(tmpDir, png), cacheFile);
+    } finally { fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {}); }
     return;
   }
-  const tmpDir = path.join(THUMB_DIR, '_ql_' + process.pid + '_' + crypto.randomBytes(4).toString('hex'));
-  await fsp.mkdir(tmpDir, { recursive: true });
-  try {
-    await run('qlmanage', ['-t', '-s', String(size), '-o', tmpDir, src]);
-    const png = (await fsp.readdir(tmpDir)).find((f) => f.endsWith('.png'));
-    if (!png) throw new Error('no thumb');
-    await fsp.rename(path.join(tmpDir, png), cacheFile);
-  } finally { fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {}); }
+
+  // Windows / Linux: sharp + ffmpeg-static
+  ensureThumbLibs();
+  if (isImg) {
+    if (!sharpModule) throw new Error('sharp 未加载');
+    const fmt = cacheFile.endsWith('.png') ? 'png' : 'jpeg';
+    await sharpModule(src)
+      .resize(size, size, { fit: 'inside', withoutEnlargement: true })
+      .toFormat(fmt)
+      .toFile(cacheFile);
+    return;
+  }
+  // 视频 / PDF: ffmpeg 抽第一帧
+  if (!ffmpegPath) throw new Error('ffmpeg-static 未加载');
+  await run(ffmpegPath, [
+    '-ss', '00:00:01', '-i', src, '-vframes', '1',
+    '-vf', `scale=${size}:-1`, '-q:v', '3', '-y', cacheFile
+  ]);
 }
 // 缩略图缓存按总体积上限做 LRU 裁剪（同一文件改一次就多一个缓存键，不清会无限涨）
 async function pruneThumbs(maxBytes = 400 * 1024 * 1024) {
