@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-06-21
+
+### Added
+- **feat(wechat)**: 放开 Windows 平台「离开不待机」开关
+  - 底层 `trySetDisableSleep()` 已有 Windows 分支（PowerShell + SetThreadExecutionState），本次解锁前端 UI 调用
+  - `wechat:setStayAwake` IPC handler 删除 macOS only 硬编码
+  - `ensurePmsetRule()` 在 Windows 直接返回 true（无需 sudoers）
+  - `will-quit` 退出时恢复休眠（含 Windows）
+  - 微信面板「离开不待机」按钮在 Windows 也显示
+  - macOS 行为完全不变
+
 ## [2.4.0] - 2026-06-20
 
 ### Added

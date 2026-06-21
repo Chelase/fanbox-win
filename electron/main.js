@@ -372,7 +372,7 @@ function installSudoers() {
 
 // 确保 pmset 免密规则就位（探针：设 0 无害；不行就装一次规则）。两个开关共用。
 async function ensurePmsetRule() {
-  if (process.platform !== 'darwin') return false;
+  if (process.platform !== 'darwin') return true; // Windows 无需 sudoers，假设规则就绪
   if (trySetDisableSleep(false)) return true; // 已有免密规则
   return installSudoers();
 }
@@ -491,7 +491,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 // 退出兜底：无论怎么退（⌘Q、崩溃前的正常退出），都恢复系统休眠，绝不留禁休眠的烂摊子
-app.on('will-quit', () => { if (process.platform === 'darwin') trySetDisableSleep(false); });
+app.on('will-quit', () => { if (process.platform === 'darwin' || process.platform === 'win32') trySetDisableSleep(false); });
 
 // ---------- 终端录制（黑匣子）：把 PTY 字节流旁路成 asciinema v2 .cast ----------
 // 设计铁律：录制器是一根哑管子——只异步旁路字节，全程 try/catch，写失败就静默自废，
@@ -867,7 +867,6 @@ ipcMain.handle('wechat:check', async () => { ensureWechat(); return wechatBridge
 // 「离开不待机」开关：开启时（首次需管理员密码装免密规则）+ 微信连着 → 禁休眠，息屏/合盖也能远程操控
 ipcMain.handle('wechat:setStayAwake', async (e, { on } = {}) => {
   ensureWechat();
-  if (process.platform !== 'darwin') return { ok: false, error: 'macOS only' };
   if (on) {
     const choice = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
       type: 'warning', buttons: [M('开启', 'Enable'), M('取消', 'Cancel')], defaultId: 0, cancelId: 1,

@@ -2332,8 +2332,8 @@ const wechatView = {
   syncAwake() {
     const e = this.el(); if (!e) return;
     const btn = e.querySelector('#wx-awake'); if (!btn) return;
-    const mac = (this.platform || (window.fanboxEnv && window.fanboxEnv.platform)) === 'darwin';
-    btn.classList.toggle('hidden', !mac); // 仅 macOS 支持（pmset 禁休眠）
+const supported = (this.platform || (window.fanboxEnv && window.fanboxEnv.platform)) === 'darwin' || (this.platform || (window.fanboxEnv && window.fanboxEnv.platform)) === 'win32';
+    btn.classList.toggle('hidden', !supported);
     btn.classList.toggle('on', this.stayAwake);
     btn.textContent = this.stayAwake ? '🌙 离开不待机 · 开' : '🌙 离开不待机';
     btn.title = this.stayAwake
